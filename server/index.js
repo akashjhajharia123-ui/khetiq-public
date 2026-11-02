@@ -247,6 +247,22 @@ function rowsFrom(payload) {
   const arrays = walkObjects(payload).filter(Array.isArray)
   return arrays.sort((a, b) => b.length - a.length)[0] || []
 }
+function flattenAgmarknet(payload) {
+  const records = []
+  const visit = (value, context = {}) => {
+    if (Array.isArray(value)) { for (const item of value) visit(item, context); return }
+    if (!value || typeof value !== 'object') return
+    const next = { ...context }
+    for (const key of ['marketName', 'districtName', 'stateName', 'arrivalDate', 'date', 'commodityName']) {
+      if (value[key] != null) next[key] = value[key]
+    }
+    const keys = Object.keys(value).map(normalizeKey)
+    if (keys.some((key) => ['modalprice', 'minimumprice', 'minprice'].includes(key))) records.push({ ...next, ...value })
+    else for (const child of Object.values(value)) visit(child, next)
+  }
+  visit(payload)
+  return records
+}
 function field(record, ...names) {
   const entries = Object.entries(record || {})
   for (const name of names) {
@@ -268,7 +284,11 @@ async function agmarknetFetch(pathname, params = {}) {
   return data
 }
 async function agmarknetMandi({ commodity, state, district, cacheKey }) {
-  const metadata = await agmarknetFetch('/daily-price-arrival/filters')
+  const [states, commodities] = await Promise.all([
+    agmarknetFetch('/location/state', { page: '1' }),
+    agmarknetFetch('/commodities', { page_size: '500' }),
+  ])
+  const metadata = { states, commodities }
   const stateId = lookupEntry(metadata, state, 'state')
   const commodityAliases = { Soyabean: 'Soybean', Maize: 'Maize', Mustard: 'Rapeseed & Mustard', Rice: 'Paddy', Wheat: 'Wheat', Cotton: 'Cotton', Onion: 'Onion', Potato: 'Potato' }
   const commodityId = lookupEntry(metadata, commodity, 'commodity') || lookupEntry(metadata, commodityAliases[commodity] || commodity, 'commodity')
@@ -277,7 +297,7 @@ async function agmarknetMandi({ commodity, state, district, cacheKey }) {
   const data = await agmarknetFetch('/prices-and-arrivals/date-wise/specific-commodity', {
     year: String(now.getFullYear()), month: String(now.getMonth() + 1), stateId: String(stateId), commodityId: String(commodityId), includeExcel: 'false',
   })
-  const records = rowsFrom(data).map((record) => ({
+  const records = flattenAgmarknet(data).map((record) => ({
     state: field(record, 'state', 'stateName') || state,
     district: field(record, 'district', 'districtName'),
     market: field(record, 'market', 'marketName'),
