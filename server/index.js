@@ -285,7 +285,7 @@ async function agmarknetFetch(pathname, params = {}) {
 }
 async function agmarknetMandi({ commodity, state, district, cacheKey }) {
   const [states, commodities] = await Promise.all([
-    agmarknetFetch('/location/state', { page: '1' }),
+    agmarknetFetch('/location/state', { page: '1', search: state }),
     agmarknetFetch('/commodities', { page_size: '500' }),
   ])
   const metadata = { states, commodities }
