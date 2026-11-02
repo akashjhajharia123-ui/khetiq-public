@@ -131,6 +131,7 @@ const fetchJson = async (url, options = {}) => {
       ? `The ${host} service took too long to respond. Please try again.`
       : `KhetiQ could not reach ${host}. Please retry in a moment.`)
     wrapped.status = 502
+    wrapped.cause = error
     throw wrapped
   }
   const text = await response.text()
@@ -456,7 +457,15 @@ app.get('/api/weather', async (req, res) => {
 
 app.get('/api/mandi', rateLimit({ max: 20 }), async (req, res) => {
   try { res.json(await mandi(req.query)) }
-  catch (error) { res.status(error.status || 502).json({ error: error.message }) }
+  catch (error) {
+    // Log only upstream diagnostics; never include request URLs or API keys.
+    console.error('[mandi] upstream request failed', {
+      status: error.status || 502,
+      message: error.message,
+      cause: error.cause?.code || error.cause?.message || undefined,
+    })
+    res.status(error.status || 502).json({ error: error.message })
+  }
 })
 
 app.post('/api/chat', rateLimit({ max: 20 }), async (req, res) => {
