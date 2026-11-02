@@ -462,7 +462,7 @@ app.get('/api/mandi', rateLimit({ max: 20 }), async (req, res) => {
     console.error('[mandi] upstream request failed', {
       status: error.status || 502,
       message: error.message,
-      cause: error.cause?.code || error.cause?.message || undefined,
+      cause: error.cause?.code || error.cause?.message || error.cause?.name || undefined,
     })
     res.status(error.status || 502).json({ error: error.message })
   }
@@ -475,8 +475,9 @@ app.get('/api/mandi/diagnostics', rateLimit({ max: 3 }), async (_req, res) => {
     res.json({ configured: true, reachable: true, recordCount: result.records.length, sampleArrivalDate: result.records[0]?.arrivalDate || null, source: result.source })
   } catch (error) {
     const causeCode = error.cause?.code || null
-    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, cause: causeCode || error.cause?.message || undefined })
-    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, causeCode, error: error.message })
+    const cause = error.cause?.message || error.cause?.name || null
+    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, causeCode, cause })
+    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, causeCode, cause, error: error.message })
   }
 })
 
