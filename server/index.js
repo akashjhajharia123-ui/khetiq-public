@@ -292,7 +292,12 @@ async function agmarknetMandi({ commodity, state, district, cacheKey }) {
   const stateId = lookupEntry(metadata, state, 'state')
   const commodityAliases = { Soyabean: 'Soybean', Maize: 'Maize', Mustard: 'Rapeseed & Mustard', Rice: 'Paddy', Wheat: 'Wheat', Cotton: 'Cotton', Onion: 'Onion', Potato: 'Potato' }
   const commodityId = lookupEntry(metadata, commodity, 'commodity') || lookupEntry(metadata, commodityAliases[commodity] || commodity, 'commodity')
-  if (!stateId || !commodityId) throw new Error('Agmarknet is reachable, but could not match this state or commodity.')
+  if (!stateId || !commodityId) {
+    const sample = (payload) => walkObjects(payload).filter((item) => !Array.isArray(item)).slice(0, 4).map((item) => Object.keys(item))
+    const error = new Error('Agmarknet is reachable, but could not match this state or commodity.')
+    error.details = { stateMatched: Boolean(stateId), commodityMatched: Boolean(commodityId), stateResponseKeys: Object.keys(states || {}), commodityResponseKeys: Object.keys(commodities || {}), stateSampleKeys: sample(states), commoditySampleKeys: sample(commodities) }
+    throw error
+  }
   const now = new Date()
   const data = await agmarknetFetch('/prices-and-arrivals/date-wise/specific-commodity', {
     year: String(now.getFullYear()), month: String(now.getMonth() + 1), stateId: String(stateId), commodityId: String(commodityId), includeExcel: 'false',
@@ -539,8 +544,8 @@ app.get('/api/mandi/diagnostics', rateLimit({ max: 3 }), async (_req, res) => {
     res.json({ configured: true, reachable: true, recordCount: result.records.length, sampleArrivalDate: result.records[0]?.arrivalDate || null, source: result.source })
   } catch (error) {
     const cause = networkCause(error)
-    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, ...cause })
-    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, ...cause, error: error.message })
+    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, ...cause, details: error.details })
+    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, ...cause, details: error.details, error: error.message })
   }
 })
 
