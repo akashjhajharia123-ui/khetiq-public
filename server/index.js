@@ -468,6 +468,18 @@ app.get('/api/mandi', rateLimit({ max: 20 }), async (req, res) => {
   }
 })
 
+app.get('/api/mandi/diagnostics', rateLimit({ max: 3 }), async (_req, res) => {
+  if (!process.env.DATA_GOV_API_KEY) return res.status(503).json({ configured: false, reachable: false, error: 'DATA_GOV_API_KEY is missing on the server.' })
+  try {
+    const result = await mandi({ commodity: 'Wheat', state: 'Maharashtra' })
+    res.json({ configured: true, reachable: true, recordCount: result.records.length, sampleArrivalDate: result.records[0]?.arrivalDate || null, source: result.source })
+  } catch (error) {
+    const causeCode = error.cause?.code || null
+    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, cause: causeCode || error.cause?.message || undefined })
+    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, causeCode, error: error.message })
+  }
+})
+
 app.post('/api/chat', rateLimit({ max: 20 }), async (req, res) => {
   const { message, history = [], profile = {} } = req.body || {}
   if (!String(message || '').trim()) return res.status(400).json({ error: 'Write a question first.' })
