@@ -10,6 +10,7 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
 const SARVAM_URL = 'https://api.sarvam.ai'
 const UI_TRANSLATION_CODES = new Set(['hi-IN', 'bn-IN', 'gu-IN', 'kn-IN', 'ml-IN', 'mr-IN', 'od-IN', 'pa-IN', 'ta-IN', 'te-IN', 'as-IN', 'ur-IN', 'ne-IN', 'kok-IN', 'ks-IN', 'sd-IN', 'sa-IN', 'sat-IN', 'mni-IN', 'brx-IN', 'mai-IN', 'doi-IN'])
 const MANDI_RESOURCE = '9ef84268-d588-465a-a308-a864a43d0070'
+const AGMARKNET_V2 = 'https://api.agmarknet.gov.in/v1'
 const INDIA_STATE_ALIASES = [
   ['Andhra Pradesh', 'andhra pradesh', 'आंध्र प्रदेश'], ['Arunachal Pradesh', 'arunachal pradesh', 'अरुणाचल प्रदेश'],
   ['Assam', 'assam', 'असम'], ['Bihar', 'bihar', 'बिहार'], ['Chhattisgarh', 'chhattisgarh', 'छत्तीसगढ़'],
@@ -215,44 +216,80 @@ function mapWeatherCode(code) {
 }
 
 async function mandi({ commodity = 'Wheat', state = '', district = '' }) {
-  if (!process.env.DATA_GOV_API_KEY) {
-    return { available: false, reason: 'Mandi prices are not connected yet. Add DATA_GOV_API_KEY to the server .env file.', source: 'AGMARKNET via data.gov.in' }
-  }
   const cacheKey = [commodity, state, district].map((value) => String(value || '').trim().toLowerCase()).join('|')
   const cached = mandiCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.value
-  const url = new URL(`https://api.data.gov.in/resource/${MANDI_RESOURCE}`)
-  const params = new URLSearchParams({ 'api-key': process.env.DATA_GOV_API_KEY, format: 'json', limit: '100' })
-  if (commodity) params.set('filters[commodity]', commodity)
-  if (state) params.set('filters[state]', state)
-  if (district) params.set('filters[district]', district)
-  url.search = params
-  let data
-  try {
-    data = await fetchJson(url)
-  } catch (error) {
-    if (error.status === 401 || error.status === 403) {
-      const authError = new Error('data.gov.in rejected DATA_GOV_API_KEY. Check the key in Render Environment and redeploy the service.')
-      authError.status = error.status
-      throw authError
-    }
-    if (error.status === 429) {
-      const limitError = new Error('data.gov.in rate limit reached. Please wait a minute and search again.')
-      limitError.status = 429
-      throw limitError
-    }
-    // A single retry handles brief data.gov.in connection resets without
-    // creating a long request loop or exposing the API key to the client.
-    if (error.status !== 502) throw error
-    data = await fetchJson(url)
+  return agmarknetMandi({ commodity, state, district, cacheKey })
+}
+
+function normalizeKey(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '') }
+function walkObjects(value, output = []) {
+  if (Array.isArray(value)) { output.push(value); for (const item of value) walkObjects(item, output) }
+  else if (value && typeof value === 'object') {
+    output.push(value)
+    for (const child of Object.values(value)) walkObjects(child, output)
   }
-  const records = (data.records || []).map((record) => ({
-    state: record.state, district: record.district, market: record.market,
-    commodity: record.commodity, variety: record.variety, grade: record.grade,
-    arrivalDate: record.arrival_date,
-    minPrice: Number(record.min_price), maxPrice: Number(record.max_price), modalPrice: Number(record.modal_price),
-  })).sort((a, b) => (parseDate(b.arrivalDate) || 0) - (parseDate(a.arrivalDate) || 0))
-  const result = { available: true, source: 'AGMARKNET via data.gov.in', sourceUrl: 'https://www.data.gov.in/catalog/current-daily-price-various-commodities-various-markets-mandi', retrievedAt: new Date().toISOString(), records }
+  return output
+}
+function lookupEntry(payload, name, kind) {
+  const wanted = normalizeKey(name)
+  const idKeys = kind === 'state' ? ['stateid', 'id'] : ['commodityid', 'commid', 'id']
+  const nameKeys = kind === 'state' ? ['statename', 'name', 'state'] : ['commodityname', 'commodity', 'name']
+  for (const item of walkObjects(payload)) {
+    const entries = Object.entries(item)
+    const label = entries.find(([key]) => nameKeys.includes(normalizeKey(key)))?.[1]
+    const id = entries.find(([key]) => idKeys.includes(normalizeKey(key)))?.[1]
+    if (label && id != null && normalizeKey(label) === wanted) return id
+  }
+  return null
+}
+function rowsFrom(payload) {
+  const arrays = walkObjects(payload).filter(Array.isArray)
+  return arrays.sort((a, b) => b.length - a.length)[0] || []
+}
+function field(record, ...names) {
+  const entries = Object.entries(record || {})
+  for (const name of names) {
+    const wanted = normalizeKey(name)
+    const match = entries.find(([key]) => normalizeKey(key) === wanted || normalizeKey(key).startsWith(wanted))
+    if (match) return match[1]
+  }
+  return ''
+}
+async function agmarknetFetch(pathname, params = {}) {
+  const url = new URL(`${AGMARKNET_V2}${pathname}`)
+  url.search = new URLSearchParams(params)
+  const data = await fetchJson(url, { headers: {
+    Accept: 'application/json, text/plain, */*',
+    Origin: 'https://agmarknet.gov.in',
+    Referer: 'https://agmarknet.gov.in/',
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/135.0.0.0 Safari/537.36',
+  } })
+  return data
+}
+async function agmarknetMandi({ commodity, state, district, cacheKey }) {
+  const metadata = await agmarknetFetch('/daily-price-arrival/filters')
+  const stateId = lookupEntry(metadata, state, 'state')
+  const commodityAliases = { Soyabean: 'Soybean', Maize: 'Maize', Mustard: 'Rapeseed & Mustard', Rice: 'Paddy', Wheat: 'Wheat', Cotton: 'Cotton', Onion: 'Onion', Potato: 'Potato' }
+  const commodityId = lookupEntry(metadata, commodity, 'commodity') || lookupEntry(metadata, commodityAliases[commodity] || commodity, 'commodity')
+  if (!stateId || !commodityId) throw new Error('Agmarknet is reachable, but could not match this state or commodity.')
+  const now = new Date()
+  const data = await agmarknetFetch('/prices-and-arrivals/date-wise/specific-commodity', {
+    year: String(now.getFullYear()), month: String(now.getMonth() + 1), stateId: String(stateId), commodityId: String(commodityId), includeExcel: 'false',
+  })
+  const records = rowsFrom(data).map((record) => ({
+    state: field(record, 'state', 'stateName') || state,
+    district: field(record, 'district', 'districtName'),
+    market: field(record, 'market', 'marketName'),
+    commodity: field(record, 'commodity', 'commodityName') || commodity,
+    variety: field(record, 'variety', 'varietyName'), grade: field(record, 'grade'),
+    arrivalDate: field(record, 'arrival_date', 'arrivalDate', 'date'),
+    minPrice: Number(field(record, 'min_price', 'minPrice')),
+    maxPrice: Number(field(record, 'max_price', 'maxPrice')),
+    modalPrice: Number(field(record, 'modal_price', 'modalPrice')),
+  })).filter((record) => record.modalPrice > 0 && (!district || normalizeKey(record.district) === normalizeKey(district)))
+    .sort((a, b) => (parseDate(b.arrivalDate) || 0) - (parseDate(a.arrivalDate) || 0))
+  const result = { available: true, source: 'AGMARKNET 2.0', sourceUrl: 'https://agmarknet.gov.in/home', retrievedAt: new Date().toISOString(), records }
   mandiCache.set(cacheKey, { value: result, expiresAt: Date.now() + 5 * 60_000 })
   return result
 }
@@ -443,7 +480,7 @@ app.get('/api/health', (_req, res) => res.json({
   ok: true,
   integrations: {
     weather: { configured: Boolean(process.env.WEATHERAPI_KEY), provider: process.env.WEATHERAPI_KEY ? 'WeatherAPI.com' : 'Open-Meteo (local preview only)', needsKey: process.env.NODE_ENV === 'production' && !process.env.WEATHERAPI_KEY },
-    mandi: { configured: Boolean(process.env.DATA_GOV_API_KEY), provider: 'AGMARKNET / data.gov.in', needsKey: true },
+    mandi: { configured: true, provider: 'AGMARKNET 2.0', needsKey: false },
     gemini: { configured: Boolean(process.env.GEMINI_API_KEY), model: GEMINI_MODEL, needsKey: true },
     sarvam: { configured: Boolean(process.env.SARVAM_API_KEY), provider: 'Saaras v4 + Bulbul v4 Flash + Sarvam 105B' },
   },
@@ -477,7 +514,6 @@ app.get('/api/mandi', rateLimit({ max: 20 }), async (req, res) => {
 })
 
 app.get('/api/mandi/diagnostics', rateLimit({ max: 3 }), async (_req, res) => {
-  if (!process.env.DATA_GOV_API_KEY) return res.status(503).json({ configured: false, reachable: false, error: 'DATA_GOV_API_KEY is missing on the server.' })
   try {
     const result = await mandi({ commodity: 'Wheat', state: 'Maharashtra' })
     res.json({ configured: true, reachable: true, recordCount: result.records.length, sampleArrivalDate: result.records[0]?.arrivalDate || null, source: result.source })
