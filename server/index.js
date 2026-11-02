@@ -141,6 +141,7 @@ const fetchJson = async (url, options = {}) => {
   if (!response.ok) {
     const error = new Error(body?.error?.message || body?.message || `Request failed (${response.status})`)
     error.status = response.status
+    error.upstream = typeof text === 'string' ? text.slice(0, 500) : ''
     throw error
   }
   return body
@@ -544,8 +545,8 @@ app.get('/api/mandi/diagnostics', rateLimit({ max: 3 }), async (_req, res) => {
     res.json({ configured: true, reachable: true, recordCount: result.records.length, sampleArrivalDate: result.records[0]?.arrivalDate || null, source: result.source })
   } catch (error) {
     const cause = networkCause(error)
-    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, ...cause, details: error.details })
-    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, ...cause, details: error.details, error: error.message })
+    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, ...cause, details: error.details, upstream: error.upstream })
+    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, ...cause, details: error.details, upstream: error.upstream, error: error.message })
   }
 })
 
