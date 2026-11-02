@@ -234,7 +234,7 @@ function walkObjects(value, output = []) {
 function lookupEntry(payload, name, kind) {
   const wanted = normalizeKey(name)
   const idKeys = kind === 'state' ? ['stateid', 'id'] : ['commodityid', 'commid', 'id']
-  const nameKeys = kind === 'state' ? ['statename', 'name', 'state'] : ['commodityname', 'commodity', 'name']
+  const nameKeys = kind === 'state' ? ['statename', 'name', 'state'] : ['commodityname', 'cmdtname', 'commodity', 'name']
   for (const item of walkObjects(payload)) {
     const entries = Object.entries(item)
     const label = entries.find(([key]) => nameKeys.includes(normalizeKey(key)))?.[1]
