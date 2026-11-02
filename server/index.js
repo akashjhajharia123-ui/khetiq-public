@@ -145,6 +145,12 @@ const fetchJson = async (url, options = {}) => {
   return body
 }
 
+function networkCause(error) {
+  let current = error?.cause || error
+  for (let depth = 0; current?.cause && depth < 4; depth += 1) current = current.cause
+  return { code: current?.code || null, message: current?.message || current?.name || null }
+}
+
 async function geocode(query) {
   if (process.env.WEATHERAPI_KEY) {
     const url = new URL('https://api.weatherapi.com/v1/search.json')
@@ -459,10 +465,12 @@ app.get('/api/mandi', rateLimit({ max: 20 }), async (req, res) => {
   try { res.json(await mandi(req.query)) }
   catch (error) {
     // Log only upstream diagnostics; never include request URLs or API keys.
+    const cause = networkCause(error)
     console.error('[mandi] upstream request failed', {
       status: error.status || 502,
       message: error.message,
-      cause: error.cause?.code || error.cause?.message || error.cause?.name || undefined,
+      causeCode: cause.code,
+      cause: cause.message,
     })
     res.status(error.status || 502).json({ error: error.message })
   }
@@ -474,10 +482,9 @@ app.get('/api/mandi/diagnostics', rateLimit({ max: 3 }), async (_req, res) => {
     const result = await mandi({ commodity: 'Wheat', state: 'Maharashtra' })
     res.json({ configured: true, reachable: true, recordCount: result.records.length, sampleArrivalDate: result.records[0]?.arrivalDate || null, source: result.source })
   } catch (error) {
-    const causeCode = error.cause?.code || null
-    const cause = error.cause?.message || error.cause?.name || null
-    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, causeCode, cause })
-    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, causeCode, cause, error: error.message })
+    const cause = networkCause(error)
+    console.error('[mandi] diagnostic probe failed', { status: error.status || 502, message: error.message, ...cause })
+    res.status(502).json({ configured: true, reachable: false, status: error.status || 502, ...cause, error: error.message })
   }
 })
 
